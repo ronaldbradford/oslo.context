@@ -29,7 +29,8 @@ _request_store = threading.local()
 
 
 def generate_request_id():
-    return 'req-%s' % uuid.uuid4()
+    """Generate a unique request id."""
+    return b'req-' + str(uuid.uuid4()).encode('ascii')
 
 
 class RequestContext(object):
@@ -39,8 +40,6 @@ class RequestContext(object):
     Stores information about the security context under which the user
     accesses the system, as well as additional request information.
     """
-
-    user_idt_format = '{user} {tenant} {domain} {user_domain} {p_domain}'
 
     def __init__(self, auth_token=None, user=None, tenant=None, domain=None,
                  user_domain=None, project_domain=None, is_admin=False,
@@ -68,16 +67,10 @@ class RequestContext(object):
             self.update_store()
 
     def update_store(self):
+        """Store the context in the current thread."""
         _request_store.context = self
 
     def to_dict(self):
-        user_idt = (
-            self.user_idt_format.format(user=self.user or '-',
-                                        tenant=self.tenant or '-',
-                                        domain=self.domain or '-',
-                                        user_domain=self.user_domain or '-',
-                                        p_domain=self.project_domain or '-'))
-
         return {'user': self.user,
                 'tenant': self.tenant,
                 'domain': self.domain,
@@ -88,11 +81,35 @@ class RequestContext(object):
                 'show_deleted': self.show_deleted,
                 'auth_token': self.auth_token,
                 'request_id': self.request_id,
-                'resource_uuid': self.resource_uuid,
-                'user_identity': user_idt}
+                'resource_uuid': self.resource_uuid}
+
+    def get_logging_values(self, conf):
+        """Return a dict containing values for logging using this context."""
+        values = self.to_dict()
+        values.update({
+            'project': self.tenant,
+            'instance': '',
+            'color': '',
+            'resource': '',
+            'user_name': '',
+            'project_name': ''
+        })
+
+        if conf:
+            # Set the "user_identity" value by using
+            # "logging_user_identity_format"
+            values.update({
+                'user_identity': (
+                    conf.logging_user_identity_format %
+                    _ReplaceFalseValue(values)
+                )
+            })
+
+        return values
 
     @classmethod
     def from_dict(cls, ctx):
+        """Return a context object from a given dict."""
         return cls(
             auth_token=ctx.get("auth_token"),
             user=ctx.get("user"),
@@ -155,7 +172,7 @@ def get_context_from_function_and_args(function, args, kwargs):
 
 def is_user_context(context):
     """Indicates if the request context is a normal user."""
-    if not context or not isinstance(context, RequestContext):
+    if not context:
         return False
     if context.is_admin:
         return False
@@ -168,3 +185,9 @@ def get_current():
     If no context is set, returns None
     """
     return getattr(_request_store, 'context', None)
+
+
+class _ReplaceFalseValue(dict):
+    """Replace unknown value in dict with '-'"""
+    def __getitem__(self, key):
+        return dict.get(self, key, None) or '-'
